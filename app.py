@@ -8,7 +8,7 @@ import random
 
 # 1. 페이지 설정 및 디자인
 st.set_page_config(page_title="AI S&OP Control Tower", layout="wide")
-st.title("🛡️ 스마트제조 AI 생산전략 관제탑 (S&OP Master)")
+st.title("🛡️원예장비 업체 총괄 시각화")
 
 # 2. AI 컨설턴트 로직 (Gemini 2.5-Flash-Lite + 무적 로테이션/재시도)
 def get_ai_consultant(prompt, context_summary):
