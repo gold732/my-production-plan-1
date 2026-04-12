@@ -157,6 +157,11 @@ with tab2:
 
 with tab3:
     st.subheader("💬 AI 전략 상담방")
+    # --- 추가된 대화 초기화 버튼 ---
+    if st.button("🧹 대화 내용 초기화"):
+        st.session_state.messages = []  # 메시지 리스트 비우기
+        st.rerun()                      # 화면 새로고침하여 반영
+    # ------------------------------          
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
     if prompt := st.chat_input("계획에 대해 질문하세요."):
