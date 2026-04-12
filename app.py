@@ -18,7 +18,7 @@ def get_ai_consultant(prompt, context):
         
         # API 설정 및 모델 호출 (에러 방지를 위해 모델명 재확인)
         genai.configure(api_key=random.choice(keys))
-        model = genai.GenerativeModel('Gemini 2.5 Flash-Lite')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         system_msg = f"""당신은 스마트제조 생산관리 전문가입니다. 
         사용자가 수립한 총괄생산계획(APP) 최적화 데이터를 바탕으로 통찰력을 제공하세요.
