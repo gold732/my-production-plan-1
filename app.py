@@ -1,4 +1,4 @@
-Import streamlit as st
+import streamlit as st
 import pandas as pd
 from pyomo.environ import *
 import plotly.graph_objects as go
