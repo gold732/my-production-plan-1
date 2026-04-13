@@ -197,4 +197,3 @@ with tab3:
             ai_res = get_ai_consultant(prompt, ctx)
             st.markdown(ai_res)
             st.session_state.messages.append({"role": "assistant", "content": ai_res})
-// 외주 비용이 이상하지 않나?
