@@ -109,4 +109,81 @@ with tab1:
                 if sol.solver.termination_condition == TerminationCondition.optimal:
                     st.session_state['res'] = model
                     st.session_state['success'] = True
-                    # 가동률 계산 및 전역
+                    # 가동률 계산 및 전역 저장 (AI 연동용)
+                    temp_utils = []
+                    for t in range(1, len(demand) + 1):
+                        denom = 8 * working_days * model.W[t]()
+                        temp_utils.append((model.P[t]() * std_time / denom * 100) if denom > 0 else 0)
+                    st.session_state['utils'] = temp_utils
+                    st.toast("✅ 최적화 성공!")
+                else:
+                    st.error("❌ 최적해를 찾지 못했습니다.")
+            except Exception as e:
+                st.error(f"⚠️ 오류: {str(e)}")
+
+    if st.session_state.get('success'):
+        m = st.session_state['res']
+        utils = st.session_state['utils']
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("총 운영 비용", f"{m.cost():,.0f}k")
+        k2.metric("평균 가동률", f"{sum(utils)/len(utils):.1f}%")
+        k3.metric("인력 변동 수", f"{sum(m.H[t]() + m.L[t]() for t in range(1,len(demand)+1)):.0f}명")
+        k4.metric("기말 재고량", f"{m.I[len(demand)]():,.0f}ea")
+
+        # 메인 차트 (복구 완료)
+        st.subheader("📈 월별 생산/수요/재고 흐름")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=list(range(1,len(demand)+1)), y=[m.P[t]() for t in range(1,len(demand)+1)], name="자체 생산", marker_color='royalblue'))
+        fig.add_trace(go.Bar(x=list(range(1,len(demand)+1)), y=[m.C[t]() for t in range(1,len(demand)+1)], name="외주 하청", marker_color='lightslategray'))
+        fig.add_trace(go.Scatter(x=list(range(1,len(demand)+1)), y=demand, name="예상 수요", line=dict(color='crimson', dash='dash')))
+        fig.add_trace(go.Scatter(x=list(range(1,len(demand)+1)), y=[m.I[t]() for t in range(1,len(demand)+1)], name="재고 수준", yaxis="y2", line=dict(color='orange')))
+        fig.update_layout(yaxis2=dict(overlaying='y', side='right'), barmode='stack', hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+
+        col_l, col_r = st.columns(2)
+        with col_l:
+            st.subheader("💰 비용 세부 구성")
+            costs = {
+                "노무비": sum(v_c_reg*m.W[t]() for t in range(1,len(demand)+1)), 
+                "재고비": sum(v_c_inv*m.I[t]() for t in range(1,len(demand)+1)), 
+                "재료비": sum(v_c_mat*m.P[t]() for t in range(1,len(demand)+1)), 
+                "외주비": sum(v_c_sub*m.C[t]() for t in range(1,len(demand)+1)),
+                "기타": m.cost() - sum((v_c_reg*m.W[t]() + v_c_inv*m.I[t]() + v_c_mat*m.P[t]() + v_c_sub*m.C[t]()) for t in range(1,len(demand)+1))
+            }
+            st.plotly_chart(px.pie(names=list(costs.keys()), values=list(costs.values()), hole=0.4), use_container_width=True)
+        with col_r:
+            st.subheader("👷 월별 인력 운영 현황")
+            st.line_chart(pd.DataFrame({"인원": [m.W[t]() for t in range(1,len(demand)+1)]}))
+
+with tab2:
+    if st.session_state.get('success'):
+        utils = st.session_state['utils']
+        st.subheader("⚠️ 운영 리스크 분석 (가동률)")
+        fig_risk = px.area(x=list(range(1,len(demand)+1)), y=utils, title="생산 가동률 추이 (%)", markers=True)
+        fig_risk.add_hline(y=100, line_dash="dot", line_color="red")
+        st.plotly_chart(fig_risk, use_container_width=True)
+
+with tab3:
+    st.subheader("💬 AI 전략 상담방")
+    if st.button("🧹 대화 내용 초기화"):
+        st.session_state.messages = []; st.rerun()
+    
+    st.markdown("---")
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
+
+    if prompt := st.chat_input("질문하세요."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+        
+        if st.session_state['success']:
+            m = st.session_state['res']
+            u_str = ", ".join([f"{i+1}월:{val:.1f}%" for i, val in enumerate(st.session_state['utils'])])
+            ctx = f"총비용:{m.cost():,.0f}, 가동률:[{u_str}], 외주허용:{enable_sub}"
+        else:
+            ctx = "데이터 없음"
+
+        with st.chat_message("assistant"):
+            ai_res = get_ai_consultant(prompt, ctx)
+            st.markdown(ai_res)
+            st.session_state.messages.append({"role": "assistant", "content": ai_res})
