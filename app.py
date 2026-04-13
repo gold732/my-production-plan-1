@@ -102,6 +102,13 @@ with tab1:
             try:
                 model, sol = solve_production_plan(demand, domain_type, v_c_reg, v_c_ot, v_c_h, v_c_l, v_c_inv, v_c_back, v_c_mat, v_c_sub, std_time, working_days, ot_limit, v_w_init, v_i_init, v_i_final)
                 if sol.solver.termination_condition == TerminationCondition.optimal:
+                    # 가동률을 계산해서 전역 세션(utils)에 담아둡니다.
+st.session_state['utils'] = [
+    ((model.P[t]()*std_time)/(8*working_days*model.W[t]())*100) 
+    if (8*working_days*model.W[t]()) > 0 else 0 
+    for t in range(1, len(demand)+1)
+]
+
                     st.session_state['res'] = model
                     st.session_state['success'] = True
                     st.toast("✅ 최적화 성공!")
@@ -165,6 +172,14 @@ with tab3:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
     if prompt := st.chat_input("계획에 대해 질문하세요."):
+        if st.session_state.get('success'):
+    m = st.session_state['res']
+    # 저장된 가동률 리스트를 "1월: 95%, 2월: 110%..." 식의 텍스트로 만듭니다.
+    u_str = ", ".join([f"{i+1}월:{val:.1f}%" for i, val in enumerate(st.session_state['utils'])])
+    
+    # 이 텍스트(u_str)를 AI에게 보내는 문맥(ctx)에 포함시킵니다.
+    ctx = f"총비용:{m.cost():,.0f}, 월별가동률:[{u_str}], 기말재고:{m.I[len(demand)]()}"
+
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
         ctx = f"비용:{m.cost() if st.session_state['success'] else 0}, 모드:{opt_mode}"
