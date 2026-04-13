@@ -10,7 +10,7 @@ import random
 st.set_page_config(page_title="AI S&OP Control Tower", layout="wide")
 st.title("🛡️ 스마트제조 AI 생산전략 관제탑 (S&OP Master)")
 
-# 2. AI 컨설턴트 로직 (Gemini 2.5-Flash-Lite + 시스템 지침 강화)
+# 2. AI 컨설턴트 로직 (Gemini 2.5-Flash-Lite + 문맥 강화)
 def get_ai_consultant(prompt, context_summary):
     keys = st.secrets.get("GEMINI_KEYS", [])
     if not keys: return "⚠️ Secrets에 'GEMINI_KEYS'를 설정해주세요."
@@ -18,29 +18,25 @@ def get_ai_consultant(prompt, context_summary):
     available_keys = list(keys)
     random.shuffle(available_keys)
     
-    last_err = ""
     for key in available_keys:
         try:
             genai.configure(api_key=key)
             model = genai.GenerativeModel('gemini-2.5-flash-lite')
             
             system_instruction = f"""
-            당신은 스마트제조 및 생산관리 전문 컨설턴트입니다. 
-            아래 제공되는 최적화 결과 데이터를 분석하여 경영적 통찰을 제공하세요.
-            특히 가동률(Utilization)이 100%를 넘는 달은 생산 과부하 리스크가 크므로 이를 강력히 경고하고 대안을 제시해야 합니다.
+            당신은 원예장비 제조 APP 전문 컨설턴트입니다. 
+            아래 데이터를 분석하여 답변하세요. 
+            참고: 외주 하청은 '부품 외주 가공 및 조달' 비용으로 개당 단가가 적용됩니다.
             
-            [현재 최적화 결과 데이터]
+            [최적화 결과 요약]
             {context_summary}
             """
-            
-            response = model.generate_content(system_instruction + "\n\n사용자 질문: " + prompt)
+            response = model.generate_content(system_instruction + "\n\n질문: " + prompt)
             return response.text
-        except Exception as e:
-            last_err = str(e)
-            continue 
-    return f"❌ AI 연결 오류: {last_err}"
+        except Exception: continue 
+    return "❌ AI 연결 실패"
 
-# 3. 사이드바: 15개 제어 파라미터 (외주 비용은 개당 비용으로 명시)
+# 3. 사이드바: 15개 파라미터 풀세트
 with st.sidebar:
     st.header("🎮 시스템 제어판")
     opt_mode = st.radio("알고리즘 선택", ["정수계획법(IP)", "선형계획법(LP)"])
@@ -60,8 +56,8 @@ with st.sidebar:
     v_c_l   = st.number_input("해고 비용 (인)", value=500)
     v_c_inv = st.number_input("재고 유지비 (개/월)", value=2)
     v_c_back= st.number_input("부재고 비용 (개/월)", value=5)
-    v_c_mat = st.number_input("재료비 (개당)", value=10)
-    v_c_sub = st.number_input("외주 하청 비용 (개당)", value=30) # 개당 비용 반영
+    v_c_mat = st.number_input("자체 생산 재료비 (개당)", value=10)
+    v_c_sub = st.number_input("부품 외주 가공비 (개당)", value=30) # 개당 단가
 
     st.markdown("---")
     st.subheader("📈 초기값 및 수요")
@@ -71,7 +67,7 @@ with st.sidebar:
     v_i_init = st.number_input("현재고 수준", value=1000)
     v_i_final = st.number_input("기말 목표 재고", value=500)
 
-# 4. 최적화 엔진
+# 4. 최적화 엔진 (부품 외주 비용 독립 계산)
 def solve_production_plan(D, domain, reg, ot, h, l, inv, back, mat, sub, stime, wdays, ot_lim, w0, i0, ifinal):
     m = ConcreteModel()
     T = range(1, len(D) + 1); TIME = range(0, len(D) + 1)
@@ -79,7 +75,7 @@ def solve_production_plan(D, domain, reg, ot, h, l, inv, back, mat, sub, stime, 
     m.P = Var(TIME, domain=domain); m.I = Var(TIME, domain=domain); m.S = Var(TIME, domain=domain)
     m.C = Var(TIME, domain=domain); m.O = Var(TIME, domain=domain)
 
-    # [수정] 목적함수: 외주비용(sub)을 외주물량(m.C)에 직접 곱하여 개당 비용으로 반영
+    # 목적함수: 외주비용(sub * m.C[t]) 독립 반영
     m.cost = Objective(expr=sum(reg*m.W[t] + ot*m.O[t] + h*m.H[t] + l*m.L[t] + 
                                 inv*m.I[t] + back*m.S[t] + mat*m.P[t] + sub*m.C[t] for t in T), sense=minimize)
     
@@ -101,6 +97,7 @@ if 'messages' not in st.session_state: st.session_state.messages = []
 if 'success' not in st.session_state: st.session_state['success'] = False
 if 'utils' not in st.session_state: st.session_state['utils'] = []
 
+# 6. 메인 화면
 tab1, tab2, tab3 = st.tabs(["📊 운영 대시보드", "📉 리스크/효율 분석", "💬 AI 전략 상담방"])
 
 with tab1:
@@ -112,76 +109,61 @@ with tab1:
                 if sol.solver.termination_condition == TerminationCondition.optimal:
                     st.session_state['res'] = model
                     st.session_state['success'] = True
-                    
                     # 가동률 계산 및 세션 저장
-                    temp_utils = []
-                    for t in range(1, len(demand) + 1):
-                        denom = 8 * working_days * model.W[t]()
-                        temp_utils.append((model.P[t]() * std_time / denom * 100) if denom > 0 else 0)
-                    st.session_state['utils'] = temp_utils
-                    
+                    st.session_state['utils'] = [((model.P[t]() * std_time) / (8 * working_days * model.W[t]()) * 100) if (8 * working_days * model.W[t]()) > 0 else 0 for t in range(1, 7)]
                     st.toast("✅ 최적화 성공!")
-                else:
-                    st.error("❌ 최적해를 찾지 못했습니다. 파라미터를 조정하세요.")
-            except Exception as e:
-                st.error(f"⚠️ 연산 오류: {str(e)}")
+                else: st.error("❌ 최적해를 찾지 못했습니다.")
+            except Exception as e: st.error(f"⚠️ 오류: {str(e)}")
 
     if st.session_state.get('success'):
         m = st.session_state['res']
-        utils = st.session_state['utils']
+        u = st.session_state['utils']
+        
+        k = st.columns(4)
+        k[0].metric("총 운영 비용", f"{m.cost():,.0f}k")
+        k[1].metric("평균 가동률", f"{sum(u)/6:.1f}%")
+        k[2].metric("총 인력 변동", f"{sum(m.H[t]() + m.L[t]() for t in range(1,7)):.0f}명")
+        k[3].metric("기말 재고량", f"{m.I[6]():,.0f}ea")
 
-        # KPI
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("총 운영 비용", f"{m.cost():,.0f}k")
-        k2.metric("평균 가동률", f"{sum(utils)/len(utils):.1f}%")
-        k3.metric("인력 변동 수", f"{sum(m.H[t]() + m.L[t]() for t in range(1,len(demand)+1)):.0f}명")
-        k4.metric("기말 재고량", f"{m.I[len(demand)]():,.0f}ea")
-
-        # 메인 차트
-        st.subheader("📈 월별 생산/수요/재고 흐름")
+        # 메인 차트: 자체 생산 vs 부품 외주 가공 조달
+        st.subheader("📈 월별 생산 및 공급망 흐름 (부품 외주 포함)")
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=list(range(1,len(demand)+1)), y=[m.P[t]() for t in range(1,len(demand)+1)], name="자체 생산", marker_color='royalblue'))
-        fig.add_trace(go.Bar(x=list(range(1,len(demand)+1)), y=[m.C[t]() for t in range(1,len(demand)+1)], name="외주 하청", marker_color='lightslategray'))
-        fig.add_trace(go.Scatter(x=list(range(1,len(demand)+1)), y=demand, name="예상 수요", line=dict(color='crimson', width=3, dash='dash')))
-        fig.add_trace(go.Scatter(x=list(range(1,len(demand)+1)), y=[m.I[t]() for t in range(1,len(demand)+1)], name="재고 수준", yaxis="y2", line=dict(color='orange', width=2)))
+        fig.add_trace(go.Bar(x=list(range(1,7)), y=[m.P[t]() for t in range(1,7)], name="자체 생산", marker_color='royalblue'))
+        fig.add_trace(go.Bar(x=list(range(1,7)), y=[m.C[t]() for t in range(1,7)], name="부품 외주 가공/조달", marker_color='lightslategray'))
+        fig.add_trace(go.Scatter(x=list(range(1,7)), y=demand, name="예상 수요", line=dict(color='crimson', dash='dash')))
+        fig.add_trace(go.Scatter(x=list(range(1,7)), y=[m.I[t]() for t in range(1,7)], name="재고 수준", yaxis="y2", line=dict(color='orange')))
         fig.update_layout(yaxis2=dict(overlaying='y', side='right'), barmode='stack', hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
 
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.subheader("💰 비용 세부 구성")
-            # [수정] 비용 구성을 개당 비용 로직에 맞춰 정확히 분리
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("💰 비용 세부 구성 (외주비 분리)")
+            # [수정] 외주 하청 비용을 독립적으로 계산하여 시각화
             costs = {
-                "정규노무비": sum(v_c_reg*m.W[t]() for t in range(1,len(demand)+1)),
-                "재고유지비": sum(v_c_inv*m.I[t]() for t in range(1,len(demand)+1)),
-                "직접재료비": sum(v_c_mat*m.P[t]() for t in range(1,len(demand)+1)),
-                "외주하청비": sum(v_c_sub*m.C[t]() for t in range(1,len(demand)+1)), # 개당 비용 독립 반영
-                "기타(고용/해고/잔업)": m.cost() - sum((v_c_reg*m.W[t]() + v_c_inv*m.I[t]() + v_c_mat*m.P[t]() + v_c_sub*m.C[t]()) for t in range(1,len(demand)+1))
+                "정규 노무비": sum(v_c_reg*m.W[t]() for t in range(1,7)),
+                "재고 유지비": sum(v_c_inv*m.I[t]() for t in range(1,7)),
+                "직접 재료비": sum(v_c_mat*m.P[t]() for t in range(1,7)),
+                "부품 외주비": sum(v_c_sub*m.C[t]() for t in range(1,7)),
+                "기타(고용/해고/잔업)": m.cost() - sum((v_c_reg*m.W[t]() + v_c_inv*m.I[t]() + v_c_mat*m.P[t]() + v_c_sub*m.C[t]()) for t in range(1,7))
             }
-            st.plotly_chart(px.pie(names=list(costs.keys()), values=list(costs.values()), hole=0.4), use_container_width=True)
-        with col_r:
-            st.subheader("👷 월별 인력 운영 현황")
-            st.line_chart(pd.DataFrame({"인원": [m.W[t]() for t in range(1,len(demand)+1)]}))
+            st.plotly_chart(px.pie(names=list(costs.keys()), values=list(costs.values()), hole=0.4))
+        with c2:
+            st.subheader("👷 인력 운영 안정성")
+            st.line_chart(pd.DataFrame({"작업자 수": [m.W[t]() for t in range(1,7)]}))
 
 with tab2:
-    if st.session_state.get('success'):
-        utils = st.session_state['utils']
-        st.subheader("⚠️ 운영 리스크 분석 (가동률)")
-        fig_risk = px.area(x=list(range(1,len(demand)+1)), y=utils, title="생산 가동률 추이 (%)", markers=True)
+    if st.session_state['success']:
+        u = st.session_state['utils']
+        st.subheader("⚠️ 운영 리스크 분석")
+        fig_risk = px.area(x=list(range(1,7)), y=u, title="생산 설비 가동률 추이 (%)", markers=True)
         fig_risk.add_hline(y=100, line_dash="dot", line_color="red")
         st.plotly_chart(fig_risk, use_container_width=True)
-        if max(utils) > 100: st.error(f"🚨 가동 한계 초과 구간 감지: 최대 {max(utils):.1f}%")
-        else: st.success("✅ 생산 능력이 수요를 안정적으로 소화 중입니다.")
 
 with tab3:
     st.subheader("💬 AI 전략 상담방 (Gemini 2.5-Flash-Lite)")
-    
     if st.button("🧹 대화 내용 초기화"):
-        st.session_state.messages = []
-        st.rerun()
+        st.session_state.messages = []; st.rerun()
     
-    st.markdown("---")
-
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
@@ -191,14 +173,8 @@ with tab3:
         
         if st.session_state['success']:
             m = st.session_state['res']
-            u_list = st.session_state['utils']
-            u_str = ", ".join([f"{i+1}월:{val:.1f}%" for i, val in enumerate(u_list)])
-            # [수정] AI에게 전달하는 문맥에 개당 외주 비용 정보 포함
-            ctx = f"총비용:{m.cost():,.0f}, 월별가동률:[{u_str}], 외주단가:{v_c_sub}, 기말재고:{m.I[len(demand)]()}"
-        else:
-            ctx = "아직 최적화 계획이 수립되지 않았습니다."
-
-        with st.chat_message("assistant"):
-            ai_res = get_ai_consultant(prompt, ctx)
-            st.markdown(ai_res)
-            st.session_state.messages.append({"role": "assistant", "content": ai_res})
+            u_str = ", ".join([f"{i+1}월:{val:.1f}%" for i, val in enumerate(st.session_state['utils'])])
+            ctx = f"총비용:{m.cost():,.0f}, 월별가동률:[{u_str}], 외주단가:{v_c_sub}, 기말재고:{m.I[6]()}"
+            with st.chat_message("assistant"):
+                ai_res = get_ai_consultant(prompt, ctx)
+                st.markdown(ai_res); st.session_state.messages.append({"role": "assistant", "content": ai_res})
